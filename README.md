@@ -1,7 +1,3 @@
-<<<<<<< HEAD
-# ai-video-analyzer
-자동으로 타임라인, 썸네일, 요약글, 해시태그까지 생성합니다.
-=======
 # Run and deploy your AI Studio app
 
 This contains everything you need to run your app locally.
@@ -16,4 +12,3 @@ This contains everything you need to run your app locally.
 2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
 3. Run the app:
    `npm run dev`
->>>>>>> 8c376bf (initial commit)
