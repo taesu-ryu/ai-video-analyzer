@@ -6,9 +6,14 @@ import { GoogleGenAI, Type } from '@google/genai';
 import { useState, useRef, useEffect } from 'react';
 import ReactDOM from 'react-dom/client';
 
+const ANALYSIS_TASK_LIST = [
+  { key: 'transcript', text: '전체 대본 생성' },
+  { key: 'summary', text: '핵심 요약 및 챕터 추출' },
+  { key: 'cast', text: '출연자 및 브랜드 분석' },
+  { key: 'evaluation', text: '종합 평가 및 정리' },
+];
+
 const App = () => {
-  const [inputType, setInputType] = useState<'file' | 'url'>('file');
-  const [url, setUrl] = useState('');
   const [file, setFile] = useState<File | null>(null);
   const [result, setResult] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -22,6 +27,13 @@ const App = () => {
   const [copiedSummary, setCopiedSummary] = useState<string | null>(null);
   const [copiedTranscript, setCopiedTranscript] = useState(false);
   const [isDraggingOver, setIsDraggingOver] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
+  const [analysisProgress, setAnalysisProgress] = useState<number | null>(null);
+  const [analysisSteps, setAnalysisSteps] = useState<{ text: string; status: 'pending' | 'in-progress' | 'done' }[]>([]);
+
+  const progressIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const analysisProgressIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const analysisStepsIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     let interval: NodeJS.Timeout | null = null;
@@ -63,10 +75,20 @@ const App = () => {
     }
   }
 
-  const getPromptAndSchema = () => {
+  const getAnalysisPromptSchema = () => {
     const companyList = `코오롱인더스트리 제조부문, 코오롱인더스트리 FnC부문(코오롱 인더스트리 에프엔씨부문), 코오롱스페이스웍스(코오롱 스페이스웍스, Kolon Spaceworks), 코오롱글로벌 (코오롱 글로벌), 코오롱모빌리티그룹 (코오롱 모빌리티그룹), 코오롱모터스 (코오롱 모터스), 코오롱아우토 (코오롱 아우토), 코오롱오토모티브 (코오롱 오토모티브), 코오롱제이모빌리티 (코오롱 제이모빌리티), 코오롱베니트 (코오롱 베니트), 코오롱생명과학, 코오롱제약, 코오롱바스프이노폼 (코오롱 바스프 이노폼), 코오롱글로텍 (코오롱 글로텍), 코오롱머티리얼 (코오롱 머티리얼), 코오롱LSI (코오롱 엘에스아이), 코오롱ENP (코오롱 이엔피), 코오롱하우스비전 (코오롱 하우스비전), 코오롱인베스트먼트 (코오롱 인베스트먼트), 테크비전 (코오롱 테크비전), 슈퍼트레인 (코오롱 슈퍼트레인), 코오롱де크컴퍼지트 (코오롱 데크 컴퍼지트), 그린나래, 엠오디 (코오롱 엠오디), 네이처브리지 (코오롱 네이처브리지), 퍼플아이오 (코오롱 퍼플아이오), 스위트밀 (코오롱 스위트밀), 이노베이스 (코오롱 이노베이스), 파파모빌리티 (코오롱 파파모빌리티), 아토메탈테크코리아 (코오롱 아토메탈 테크 코리아), 엑시아머티리얼스 (코오롱 엑시아 머티리얼스), 코오롱라이프스타일컴퍼니 (코오롱 라이프스타일 컴퍼니), 리베토코리아 (코오롱 리베토 코리아), 코오롱바이오텍 (코오롱 바이오텍), 어바웃피싱 (코오롱 어바웃 피싱), 에픽프라퍼티인베스트먼트컴퍼니 (코오롱 에픽 프라퍼티 인베스트먼트 컴퍼니), 트래스코 (코오롱 트래스코), 케이오에이 (코오롱 케이오에이), 기브릿지 (코오롱 기브릿지), 비아스텔레코리아 (코오롱 비아스텔레 코리아), 더블유파트너스 (코오롱 더블유 파트너스), 로터스카스코리아 (코오롱 로터스 카스 코리아), 삼척오두풍력발전, 양산에덴밸리풍력발전, 천안북부일반산업단지, 코오롱이앤씨 (코오롱 이앤씨), 서서울고속도로, 티슈진 더블유스토어 (코오롱 티슈진 더블유 스토어)`;
+    
     return {
-      prompt: `이 영상/음성 파일을 분석하여 주요 주제별로 챕터를 나눠주세요. 각 챕터는 시작 시간(HH:MM:SS 또는 MM:SS 형식)과 간결한 챕터 제목을 포함해야 합니다. 내용의 흐름을 파악하여 논리적인 구간으로 나누고, 영상/음성 파일의 타임라인에 맞춰 타임스탬프를 생성해주세요. 추가로, 영상의 내용을 바탕으로 세 가지 다른 스타일의 요약글을 생성해주세요. 첫째, 'engaging' 키에는 재치있는 제목, 이모티콘 등을 활용하여 시청자의 흥미를 유발하는 유튜브 영상 설명글 스타일의 매력적인 소개글을 작성합니다. 둘째, 'serious' 키에는 객관적이고 전문적인 톤으로 사실에 기반한 진지한 요약글을 작성합니다. 셋째, 'content_focused' 키에는 영상의 핵심 내용과 정보를 간결하게 전달하는 내용 중심의 요약글을 작성합니다. 영상의 핵심 내용을 대표하는 관련성 높은 해시태그 10개를 한국어로 생성해주세요. 영상 전체 스크립트를 생성해주세요. 의미적으로 연관된 문장들은 하나의 단락으로 묶어주세요. 각 단락은 타임스탬프 없이 'text' 필드만 포함하는 객체의 배열 형태로 제공해주세요. 영상 자막을 기반으로 출연자 정보를 추출해주세요. 자막에 명시된 각 출연자별로 주요 발언들을 목록으로 만들어주세요. 'speaker' 필드에는 자막에 표시된 출연자의 이름, 소속, 직책 등을 포함한 전체 텍스트를 그대로 사용해야 합니다 (예: "진행자 (이광섭)", "정다운 연구원"). 일반적인 '진행자'나 '출연자 1' 같은 추상적인 명칭을 사용하는 대신, 자막에 나타나는 구체적인 텍스트를 정확히 반영해주세요. 또한, 영상/음성 파일의 음성 데이터만을 분석하여 다음 목록에 있는 회사 이름이 언급되는 모든 지점을 찾아주세요. 시각적인 정보(자막, 로고 등)는 무시하고 오직 음성으로 언급된 경우만 포함해야 합니다. 각 회사별로, 이름이 언급된 각각의 장면에 대해 타임스탬프(HH:MM:SS 또는 MM:SS 형식)와 그 발언의 맥락을 한 줄로 요약한 설명을 함께 제공해주세요. 결과에 포함된 회사 이름은 아래 목록에 있는 이름과 정확히 일치해야 합니다. 다음은 분석할 회사 목록입니다: ${companyList}. 마지막으로, 이 영상을 종합적으로 평가해주세요. 평가 항목은 '기획 및 구성', '영상미 및 편집', '내용 및 메시지', '기술적 완성도'를 포함해야 합니다. 각 항목에 대한 세부 평가 내용과 10점 만점의 점수를 부여해주세요. 이 평가를 바탕으로 '긍정적인 점'과 '개선이 필요한 점'을 각각 500자 내외의 가독성 좋은 문단으로 요약해주세요. 결과는 반드시 JSON 형식이어야 합니다.`,
+      prompt: `이 영상/음성 파일을 분석하여 다음 항목들을 모두 생성해주세요:
+      1.  **전체 스크립트:** 의미적으로 연관된 문장들은 하나의 단락으로 묶어주세요. 각 단락은 타임스탬프 없이 'text' 필드만 포함하는 객체의 배열 형태로 제공해주세요.
+      2.  **챕터:** 주요 주제별로 챕터를 나눠주세요. 각 챕터는 시작 시간(HH:MM:SS 또는 MM:SS 형식)과 간결한 챕터 제목을 포함해야 합니다. 내용의 흐름을 파악하여 논리적인 구간으로 나누고, 영상/음성 파일의 타임라인에 맞춰 타임스탬프를 생성해주세요.
+      3.  **요약글:** 영상의 내용을 바탕으로 세 가지 다른 스타일의 요약글을 생성해주세요. 첫째, 'engaging' 키에는 재치있는 제목, 이모티콘 등을 활용하여 시청자의 흥미를 유발하는 유튜브 영상 설명글 스타일의 매력적인 소개글을 작성합니다. 둘째, 'serious' 키에는 객관적이고 전문적인 톤으로 사실에 기반한 진지한 요약글을 작성합니다. 셋째, 'content_focused' 키에는 영상의 핵심 내용과 정보를 간결하게 전달하는 내용 중심의 요약글을 작성합니다.
+      4.  **해시태그:** 영상의 핵심 내용을 대표하는 관련성 높은 해시태그 10개를 한국어로 생성해주세요.
+      5.  **출연자 정보:** 영상 자막을 기반으로 출연자 정보를 추출해주세요. 자막에 명시된 각 출연자별로 주요 발언들을 목록으로 만들어주세요. 'speaker' 필드에는 자막에 표시된 출연자의 이름, 소속, 직책 등을 포함한 전체 텍스트를 그대로 사용해야 합니다 (예: "진행자 (이광섭)", "정다운 연구원"). 일반적인 '진행자'나 '출연자 1' 같은 추상적인 명칭을 사용하는 대신, 자막에 나타나는 구체적인 텍스트를 정확히 반영해주세요. 각 발언에 담긴 화자의 주요 감정(예: 긍정, 부정, 중립)을 분석하고 'emotion' 필드에 추가해주세요.
+      6.  **브랜드 노출:** 영상/음성 파일의 음성 데이터만을 분석하여 다음 목록에 있는 회사 이름이 언급되는 모든 지점을 찾아주세요. 시각적인 정보(자막, 로고 등)는 무시하고 오직 음성으로 언급된 경우만 포함해야 합니다. 각 회사별로, 이름이 언급된 각각의 장면에 대해 타임스탬프(HH:MM:SS 또는 MM:SS 형식)와 그 발언의 맥락을 한 줄로 요약한 설명을 함께 제공해주세요. 결과에 포함된 회사 이름은 아래 목록에 있는 이름과 정확히 일치해야 합니다. 'K.ON'이라는 브랜드는 분석에서 제외해주세요. 분석할 회사 목록: ${companyList}.
+      7.  **종합 평가:** 이 영상을 종합적으로 평가해주세요. 평가 항목은 '기획 및 구성', '영상미 및 편집', '내용 및 메시지', '기술적 완성도'를 포함해야 합니다. 각 항목에 대한 세부 평가 내용과 10점 만점의 점수를 부여해주세요. 이 평가를 바탕으로 '긍정적인 점'과 '개선이 필요한 점'을 각각 500자 내외의 가독성 좋은 문단으로 요약해주세요.
+      
+      결과는 반드시 JSON 형식이어야 합니다.`,
       schema: {
         type: Type.OBJECT,
         properties: {
@@ -74,18 +96,9 @@ const App = () => {
             type: Type.OBJECT,
             description: '세 가지 스타일의 영상 요약입니다.',
             properties: {
-              engaging: {
-                type: Type.STRING,
-                description: '시청자의 흥미를 유발하는 유튜브 영상 설명글 스타일의 매력적인 소개글입니다. (재치있는 제목, 이모티콘 포함)',
-              },
-              serious: {
-                type: Type.STRING,
-                description: '객관적이고 전문적인 톤으로 작성된 진지한 버전의 요약입니다.',
-              },
-              content_focused: {
-                type: Type.STRING,
-                description: '영상의 핵심 내용과 정보를 간결하게 전달하는 내용 중심의 요약입니다.',
-              },
+              engaging: { type: Type.STRING, description: '시청자의 흥미를 유발하는 유튜브 영상 설명글 스타일의 매력적인 소개글입니다. (재치있는 제목, 이모티콘 포함)' },
+              serious: { type: Type.STRING, description: '객관적이고 전문적인 톤으로 작성된 진지한 버전의 요약입니다.' },
+              content_focused: { type: Type.STRING, description: '영상의 핵심 내용과 정보를 간결하게 전달하는 내용 중심의 요약입니다.' },
             },
             required: ['engaging', 'serious', 'content_focused'],
           },
@@ -94,25 +107,14 @@ const App = () => {
             items: {
               type: Type.OBJECT,
               properties: {
-                timestamp: {
-                  type: Type.STRING,
-                  description: '챕터가 시작되는 시간 (HH:MM:SS 또는 MM:SS 형식).',
-                },
-                title: {
-                  type: Type.STRING,
-                  description: '해당 챕터의 내용을 요약하는 간결한 제목입니다.',
-                },
+                timestamp: { type: Type.STRING, description: '챕터가 시작되는 시간 (HH:MM:SS 또는 MM:SS 형식).' },
+                title: { type: Type.STRING, description: '해당 챕터의 내용을 요약하는 간결한 제목입니다.' },
               },
               required: ['timestamp', 'title'],
             },
             description: '영상/음성 파일을 기반으로 생성된 챕터 목록입니다.',
           },
-          hashtags: {
-            type: Type.ARRAY,
-            items: { type: Type.STRING },
-            description: '영상의 핵심 내용을 요약하는 10개의 관련 해시태그입니다.'
-          },
-          transcript: {
+           transcript: {
             type: Type.ARRAY,
             description: '의미있는 단락으로 나누어진 영상/음성 전체 스크립트입니다.',
             items: {
@@ -126,32 +128,29 @@ const App = () => {
               required: ['text'],
             },
           },
+          hashtags: {
+            type: Type.ARRAY,
+            items: { type: Type.STRING },
+            description: '영상의 핵심 내용을 요약하는 10개의 관련 해시태그입니다.'
+          },
           cast: {
             type: Type.ARRAY,
             description: '영상 자막에 명시된 출연자별 주요 발언 목록입니다.',
             items: {
               type: Type.OBJECT,
               properties: {
-                speaker: {
-                  type: Type.STRING,
-                  description: "자막에 표시된 출연자의 이름, 소속, 직책 등을 포함한 전체 텍스트. (예: '진행자 (이광섭)', '정다운 연구원').",
-                },
+                speaker: { type: Type.STRING, description: "자막에 표시된 출연자의 이름, 소속, 직책 등을 포함한 전체 텍스트. (예: '진행자 (이광섭)', '정다운 연구원')." },
                 dialogues: {
                   type: Type.ARRAY,
                   description: '해당 출연자의 주요 발언 목록입니다.',
                   items: {
                     type: Type.OBJECT,
                     properties: {
-                      timestamp: {
-                        type: Type.STRING,
-                        description: '해당 발언이 시작되는 시간 (HH:MM:SS 또는 MM:SS 형식).',
-                      },
-                      text: {
-                        type: Type.STRING,
-                        description: '자막에 표시된 실제 발언 내용입니다.',
-                      },
+                      timestamp: { type: Type.STRING, description: '해당 발언이 시작되는 시간 (HH:MM:SS 또는 MM:SS 형식).' },
+                      text: { type: Type.STRING, description: '자막에 표시된 실제 발언 내용입니다.' },
+                      emotion: { type: Type.STRING, description: '해당 발언에 담긴 화자의 주요 감정입니다 (예: "긍정적", "부정적", "중립").' },
                     },
-                    required: ['timestamp', 'text'],
+                    required: ['timestamp', 'text', 'emotion'],
                   },
                 },
               },
@@ -164,24 +163,15 @@ const App = () => {
             items: {
               type: Type.OBJECT,
               properties: {
-                companyName: {
-                  type: Type.STRING,
-                  description: '영상에서 발견된 회사의 이름입니다.',
-                },
+                companyName: { type: Type.STRING, description: '영상에서 발견된 회사의 이름입니다.' },
                 appearances: {
                   type: Type.ARRAY,
                   description: '해당 회사가 노출된 시간 및 맥락 목록입니다.',
                   items: {
                     type: Type.OBJECT,
                     properties: {
-                      timestamp: {
-                        type: Type.STRING,
-                        description: '노출이 시작된 시간 (HH:MM:SS 또는 MM:SS 형식).',
-                      },
-                      context: {
-                        type: Type.STRING,
-                        description: '브랜드가 노출될 때의 장면에 대한 한 줄 요약입니다.'
-                      }
+                      timestamp: { type: Type.STRING, description: '노출이 시작된 시간 (HH:MM:SS 또는 MM:SS 형식).' },
+                      context: { type: Type.STRING, description: '브랜드가 노출될 때의 장면에 대한 한 줄 요약입니다.' }
                     },
                     required: ['timestamp', 'context']
                   },
@@ -213,9 +203,33 @@ const App = () => {
             required: ['scores', 'positiveFeedback', 'improvementPoints'],
           },
         },
-        required: ['summary', 'chapters', 'hashtags', 'transcript', 'cast', 'brandExposure', 'evaluation'],
+        required: ['summary', 'chapters', 'transcript', 'hashtags', 'cast', 'brandExposure', 'evaluation'],
       },
     };
+  };
+
+  const cleanupUpload = () => {
+    if (progressIntervalRef.current) {
+      clearInterval(progressIntervalRef.current);
+      progressIntervalRef.current = null;
+    }
+    setUploadProgress(null);
+  };
+  
+  const cleanupAnalysis = () => {
+    if (analysisProgressIntervalRef.current) {
+      clearInterval(analysisProgressIntervalRef.current);
+      analysisProgressIntervalRef.current = null;
+    }
+    setAnalysisProgress(null);
+  };
+
+  const cleanupAnalysisSteps = () => {
+    if (analysisStepsIntervalRef.current) {
+      clearInterval(analysisStepsIntervalRef.current);
+      analysisStepsIntervalRef.current = null;
+    }
+    setAnalysisSteps([]);
   };
 
   const cleanupVideoUrl = () => {
@@ -225,14 +239,23 @@ const App = () => {
     }
     setVideoMetadata(null);
   };
+  
+  const resetAllState = () => {
+    setError('');
+    setResult(null);
+    setFile(null);
+    setActiveTab('chapters');
+    cleanupVideoUrl();
+    cleanupUpload();
+    cleanupAnalysis();
+    cleanupAnalysisSteps();
+    setIsLoading(false);
+    setLoadingMessage('');
+  };
 
   const handleGenerate = async () => {
-    if (inputType === 'file' && !file) {
+    if (!file) {
       setError('어떤 파일을 분석할까요? 영상이나 음성 파일을 선택해주세요.');
-      return;
-    }
-    if (inputType === 'url' && !url.trim()) {
-      setError('분석할 파일의 주소(URL)를 입력해주세요.');
       return;
     }
 
@@ -242,32 +265,14 @@ const App = () => {
     setResult(null);
     setActiveTab('chapters');
     cleanupVideoUrl();
+    cleanupUpload();
+    cleanupAnalysis();
+    cleanupAnalysisSteps();
 
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-    let fileToUpload: File | null = null;
+    const fileToUpload: File | null = file;
 
     try {
-      const { prompt, schema } = getPromptAndSchema();
-      
-      if (inputType === 'url') {
-        setLoadingMessage('URL에서 파일을 가져오는 중... 📥');
-        try {
-          const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
-          const response = await fetch(proxyUrl);
-          if (!response.ok) {
-            throw new Error(`URL에서 파일을 가져올 수 없어요. 링크가 올바른지 다시 확인해주세요.`);
-          }
-          const blob = await response.blob();
-          const fileName = url.substring(url.lastIndexOf('/') + 1).split('?')[0] || 'downloaded_file';
-          fileToUpload = new File([blob], fileName, { type: blob.type });
-        } catch (fetchError) {
-          console.error(fetchError);
-           throw new Error('URL에서 파일을 가져오는 데 실패했어요. 링크가 유효한지, 파일을 직접 업로드 해보세요.');
-        }
-      } else if (file) {
-        fileToUpload = file;
-      }
-
       if (fileToUpload) {
         if (fileToUpload.type.startsWith('video/')) {
             setAnalyzedVideoUrl(URL.createObjectURL(fileToUpload));
@@ -276,15 +281,47 @@ const App = () => {
          throw new Error('분석할 파일이 없어요. 다시 시도해주세요.');
       }
 
-      setLoadingMessage('파일을 업로드 하고있어요. 파일이 크면 조금 더 걸릴 수 있어요 🚀');
+      setLoadingMessage('파일 업로드 중... 🚀');
+      setUploadProgress(0);
+      progressIntervalRef.current = setInterval(() => {
+        setUploadProgress(prev => {
+          if (prev === null) return 0;
+          if (prev >= 99) return 99;
+          if (prev < 70) return prev + 5;
+          if (prev < 90) return prev + 2;
+          return prev + 1;
+        });
+      }, 300);
+
       const uploadResponse = await ai.files.upload({ file: fileToUpload });
 
-      setLoadingMessage('AI가 파일을 읽고 있어요. 잠시만 기다려주세요... 🤖');
+      if (progressIntervalRef.current) clearInterval(progressIntervalRef.current);
+      setUploadProgress(100);
+      await new Promise(resolve => setTimeout(resolve, 500));
+      cleanupUpload();
+
+      setLoadingMessage('AI가 파일을 처리하는 중... 🤖');
+      setAnalysisProgress(0);
       let fileState = await ai.files.get({ name: uploadResponse.name });
+      analysisProgressIntervalRef.current = setInterval(() => {
+        setAnalysisProgress(prev => {
+            if (prev === null) return 0;
+            if (fileState.state === 'PROCESSING') return prev < 20 ? prev + 2 : prev;
+            if (prev >= 99) return 99;
+            if (prev < 80) return prev + 3;
+            return prev + 1;
+        });
+      }, 1000);
+
       while (fileState.state === 'PROCESSING') {
         await new Promise((resolve) => setTimeout(resolve, 2000));
         fileState = await ai.files.get({ name: fileState.name });
       }
+      
+      if (analysisProgressIntervalRef.current) clearInterval(analysisProgressIntervalRef.current);
+      setAnalysisProgress(100);
+      await new Promise(resolve => setTimeout(resolve, 500));
+      cleanupAnalysis();
 
       if (fileState.state === 'FAILED') {
         throw new Error('파일을 처리하는 데 실패했어요. 다른 파일을 올려보시겠어요?');
@@ -293,8 +330,27 @@ const App = () => {
       if (fileState.state !== 'ACTIVE') {
         throw new Error(`파일이 아직 준비되지 않았어요. (상태: ${fileState.state})`);
       }
+      
+      setLoadingMessage('AI가 세부 항목을 분석하고 있어요... ✍️');
+      setAnalysisSteps(ANALYSIS_TASK_LIST.map(task => ({ text: task.text, status: 'pending' })));
 
-      setLoadingMessage('AI가 영상을 분석하고 있어요. 거의 다 됐어요! ⏳');
+      let currentStep = 0;
+      analysisStepsIntervalRef.current = setInterval(() => {
+        setAnalysisSteps(prevSteps => {
+          if (currentStep >= prevSteps.length) {
+            if (analysisStepsIntervalRef.current) clearInterval(analysisStepsIntervalRef.current);
+            return prevSteps;
+          }
+          return prevSteps.map((step, index) => {
+            if (index < currentStep) return { ...step, status: 'done' as const };
+            if (index === currentStep) return { ...step, status: 'in-progress' as const };
+            return { ...step, status: 'pending' as const };
+          });
+        });
+        currentStep++;
+      }, 2500); // Simulate each step takes 2.5 seconds
+
+      const { prompt, schema } = getAnalysisPromptSchema();
       const contents = [
         { text: prompt },
         {
@@ -311,9 +367,13 @@ const App = () => {
         config: {
           responseMimeType: 'application/json',
           responseSchema: schema,
+          thinkingConfig: { thinkingBudget: 0 },
         },
       });
-
+      
+      if (analysisStepsIntervalRef.current) clearInterval(analysisStepsIntervalRef.current);
+      setAnalysisSteps(prev => prev.map(s => ({...s, status: 'done'})));
+      
       const jsonString = response.text.trim();
       const parsedJson = JSON.parse(jsonString);
       
@@ -325,19 +385,12 @@ const App = () => {
       setError(`${errorMessage} 잠시 후 다시 시도해주세요.`);
       cleanupVideoUrl();
     } finally {
-      setIsLoading(false);
-      setLoadingMessage('');
+        setIsLoading(false);
+        setLoadingMessage('');
+        cleanupUpload();
+        cleanupAnalysis();
+        cleanupAnalysisSteps();
     }
-  };
-
-  const handleInputTypeChange = (newType: 'file' | 'url') => {
-    setInputType(newType);
-    setError('');
-    setResult(null);
-    setFile(null);
-    setUrl('');
-    setActiveTab('chapters');
-    cleanupVideoUrl();
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -348,6 +401,8 @@ const App = () => {
       setResult(null);
       setActiveTab('chapters');
       cleanupVideoUrl();
+      cleanupAnalysis();
+      cleanupAnalysisSteps();
       e.target.value = '';
     }
   };
@@ -382,6 +437,8 @@ const App = () => {
         setResult(null);
         setActiveTab('chapters');
         cleanupVideoUrl();
+        cleanupAnalysis();
+        cleanupAnalysisSteps();
       } else {
         setError('영상이나 음성 파일만 올릴 수 있어요.');
       }
@@ -435,8 +492,18 @@ const App = () => {
     }
   };
 
+  const getEmotionEmoji = (emotion: string): string => {
+    if (!emotion) return '💬';
+    const lowerEmotion = emotion.toLowerCase();
+    if (lowerEmotion.includes('긍정') || lowerEmotion.includes('기쁨') || lowerEmotion.includes('positive') || lowerEmotion.includes('joy')) return '😊';
+    if (lowerEmotion.includes('부정') || lowerEmotion.includes('슬픔') || lowerEmotion.includes('negative') || lowerEmotion.includes('sadness')) return '😟';
+    if (lowerEmotion.includes('놀람') || lowerEmotion.includes('surprised')) return '😮';
+    if (lowerEmotion.includes('분노') || lowerEmotion.includes('anger')) return '😠';
+    return '💬'; // Neutral as default
+  };
+
   const renderSummaryAndChapters = () => {
-    if (!result) return null;
+    if (!result || !result.summary) return null;
   
     return (
       <>
@@ -539,6 +606,16 @@ const App = () => {
     return (
       <div className="result-card">
         <h2>누가 말했을까?</h2>
+        <div className="emotion-guide">
+          <p>각 대사의 감정 상태를 이모티콘으로 확인해보세요:</p>
+          <div className="emotion-guide-items">
+            <span>😊 긍정적</span>
+            <span>😟 부정적</span>
+            <span>😮 놀람</span>
+            <span>😠 분노</span>
+            <span>💬 중립</span>
+          </div>
+        </div>
         <div className="cast-list">
           {result.cast.map((person, personIndex) => (
             <div key={personIndex} className="cast-member">
@@ -554,7 +631,12 @@ const App = () => {
                     onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && handleSeekToTime(dialogue.timestamp)}
                   >
                     <span className="cast-dialogue-timestamp">{dialogue.timestamp}</span>
-                    <p className="cast-dialogue-text">{dialogue.text}</p>
+                    <p className="cast-dialogue-text">
+                        <span className="cast-dialogue-emotion" title={dialogue.emotion}>
+                            {getEmotionEmoji(dialogue.emotion)}
+                        </span>
+                        {dialogue.text}
+                    </p>
                   </li>
                 ))}
               </ul>
@@ -648,57 +730,74 @@ const App = () => {
 
       <main>
         <section className="input-section">
-          <div className="input-type-selector">
-            <button
-              className={`mode-button ${inputType === 'file' ? 'active' : ''}`}
-              onClick={() => handleInputTypeChange('file')}
-              aria-pressed={inputType === 'file'}
-            >
-              파일 올리기
-            </button>
-            <button
-              className={`mode-button ${inputType === 'url' ? 'active' : ''}`}
-              onClick={() => handleInputTypeChange('url')}
-              aria-pressed={inputType === 'url'}
-            >
-              URL로 올리기
-            </button>
+          <div
+            className={`file-input-container ${isDraggingOver ? 'drag-over' : ''} ${isLoading ? 'disabled' : ''}`}
+            onDragEnter={handleDragEnter}
+            onDragLeave={handleDragLeave}
+            onDragOver={handleDragOver}
+            onDrop={handleDrop}
+          >
+            <input
+              type="file"
+              id="file-upload"
+              className="file-input"
+              onChange={handleFileChange}
+              disabled={isLoading}
+              accept="video/*,audio/*"
+              aria-label="영상 또는 음성 파일 선택"
+            />
+            <label htmlFor="file-upload" className={`file-input-label ${isLoading ? 'disabled' : ''}`}>
+              컴퓨터에서 파일 선택
+            </label>
+            <p className="drag-drop-text">또는 파일을 이곳에 드래그&드롭하세요</p>
+            {file && <p className="file-name">선택한 파일: {file.name}</p>}
           </div>
-          {inputType === 'file' ? (
-            <div
-              className={`file-input-container ${isDraggingOver ? 'drag-over' : ''} ${isLoading ? 'disabled' : ''}`}
-              onDragEnter={handleDragEnter}
-              onDragLeave={handleDragLeave}
-              onDragOver={handleDragOver}
-              onDrop={handleDrop}
-            >
-              <input
-                type="file"
-                id="file-upload"
-                className="file-input"
-                onChange={handleFileChange}
-                disabled={isLoading}
-                accept="video/*,audio/*"
-                aria-label="영상 또는 음성 파일 선택"
-              />
-              <label htmlFor="file-upload" className={`file-input-label ${isLoading ? 'disabled' : ''}`}>
-                컴퓨터에서 파일 선택
-              </label>
-              <p className="drag-drop-text">또는 파일을 이곳에 드래그&드롭하세요</p>
-              {file && <p className="file-name">선택한 파일: {file.name}</p>}
+          {uploadProgress !== null && isLoading && (
+            <div className="progress-container">
+              <span className="progress-label">파일 업로드</span>
+              <div className="progress-bar-wrapper">
+                <div
+                  className="progress-bar"
+                  style={{ width: `${uploadProgress}%` }}
+                  role="progressbar"
+                  aria-valuenow={uploadProgress}
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-label={`Upload progress: ${uploadProgress}%`}
+                />
+              </div>
+              <span className="progress-percentage">{uploadProgress}%</span>
             </div>
-          ) : (
-            <div className="url-input-container">
-              <input
-                type="url"
-                className="url-input"
-                value={url}
-                onChange={(e) => setUrl(e.target.value)}
-                placeholder="https://example.com/video.mp4"
-                disabled={isLoading}
-                aria-label="파일 URL 입력"
-              />
-              <p className="input-note">URL의 파일을 안전하게 가져오기 위해 외부 서비스를 이용해요. 일부 링크는 분석이 어려울 수 있습니다.</p>
+          )}
+          {analysisProgress !== null && isLoading && (
+            <div className="progress-container">
+               <span className="progress-label">AI 파일 처리</span>
+              <div className="progress-bar-wrapper">
+                <div
+                  className="progress-bar"
+                  style={{ width: `${analysisProgress}%` }}
+                  role="progressbar"
+                  aria-valuenow={analysisProgress}
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-label={`Analysis progress: ${analysisProgress}%`}
+                />
+              </div>
+              <span className="progress-percentage">{analysisProgress}%</span>
+            </div>
+          )}
+          {isLoading && analysisSteps.length > 0 && (
+            <div className="analysis-steps-container">
+              {analysisSteps.map((step, index) => (
+                <div key={index} className={`analysis-step-item status-${step.status}`}>
+                  <span className="step-status-icon">
+                    {step.status === 'pending' && '○'}
+                    {step.status === 'in-progress' && <div className="spinner-small" />}
+                    {step.status === 'done' && '✓'}
+                  </span>
+                  <span className="step-text">{step.text}</span>
+                </div>
+              ))}
             </div>
           )}
           <div className="generate-button-wrapper">
@@ -751,6 +850,7 @@ const App = () => {
                   <button 
                     className={`tab-button ${activeTab === 'chapters' ? 'active' : ''}`}
                     onClick={() => setActiveTab('chapters')}
+                    disabled={isLoading || !result.summary}
                     aria-pressed={activeTab === 'chapters'}
                   >
                     핵심 요약
@@ -758,7 +858,7 @@ const App = () => {
                   <button
                     className={`tab-button ${activeTab === 'transcript' ? 'active' : ''}`}
                     onClick={() => setActiveTab('transcript')}
-                    disabled={!result.transcript || result.transcript.length === 0}
+                    disabled={isLoading || !result.transcript}
                     aria-pressed={activeTab === 'transcript'}
                   >
                     전체 대본
@@ -766,7 +866,7 @@ const App = () => {
                    <button
                     className={`tab-button ${activeTab === 'cast' ? 'active' : ''}`}
                     onClick={() => setActiveTab('cast')}
-                    disabled={!result.cast || result.cast.length === 0}
+                    disabled={isLoading || !result.cast || result.cast.length === 0}
                     aria-pressed={activeTab === 'cast'}
                   >
                     출연자별 대사
@@ -774,7 +874,7 @@ const App = () => {
                   <button
                     className={`tab-button ${activeTab === 'brand' ? 'active' : ''}`}
                     onClick={() => setActiveTab('brand')}
-                    disabled={!result.brandExposure || result.brandExposure.length === 0}
+                    disabled={isLoading || !result.brandExposure || result.brandExposure.length === 0}
                     aria-pressed={activeTab === 'brand'}
                   >
                     브랜드 노출
@@ -782,7 +882,7 @@ const App = () => {
                   <button
                     className={`tab-button ${activeTab === 'evaluation' ? 'active' : ''}`}
                     onClick={() => setActiveTab('evaluation')}
-                    disabled={!result.evaluation}
+                    disabled={isLoading || !result.evaluation}
                     aria-pressed={activeTab === 'evaluation'}
                   >
                     종합 평가

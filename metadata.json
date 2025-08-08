@@ -1,5 +1,5 @@
 {
-  "name": "AI 영상 분석기",
+  "name": "Copy of AI 영상 분석기",
   "description": "자동으로 타임라인, 썸네일, 요약글, 해시태그까지 생성합니다.",
   "requestFramePermissions": [],
   "prompt": ""
